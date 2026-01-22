@@ -821,23 +821,23 @@ The contest will involve twenty-five industrial benchmarks; [five have been rele
 
 | Benchmark Name | \# Nodes | \# Edges | Timeout | Will be released to participants? |
 | :---- | :---- | :---- | :---- | :---- |
-| mlsys-2026-1 | 5 | 9 | 2 second(s) | Yes |
+| [mlsys-2026-1](https://github.com/yarongmu-google/MLSys/blob/main/benchmarks/mlsys-2026-1.json) | 5 | 9 | 2 second(s) | Yes |
 | mlsys-2026-2 | TBD | TBD | 2 second(s) |  |
 | mlsys-2026-3 | TBD | TBD | 2 second(s) |  |
 | mlsys-2026-4 | TBD | TBD | 2 second(s) |  |
-| mlsys-2026-5 | 19 | 34 | 5 second(s) | Yes |
+| [mlsys-2026-5](https://github.com/yarongmu-google/MLSys/blob/main/benchmarks/mlsys-2026-5.json) | 19 | 34 | 5 second(s) | Yes |
 | mlsys-2026-6 | TBD | TBD | 5 second(s) |  |
 | mlsys-2026-7 | TBD | TBD | 5 second(s) |  |
 | mlsys-2026-8 | TBD | TBD | 5 second(s) |  |
-| mlsys-2026-9 | 32 | 56 | 15 second(s) | Yes |
+| [mlsys-2026-9](https://github.com/yarongmu-google/MLSys/blob/main/benchmarks/mlsys-2026-9.json) | 32 | 56 | 15 second(s) | Yes |
 | mlsys-2026-10 | TBD | TBD | 15 seconds(s) |  |
 | mlsys-2026-11 | TBD | TBD | 15 seconds(s) |  |
 | mlsys-2026-12 | TBD | TBD | 15 seconds(s) |  |
-| mlsys-2026-13 | 63 | 126 | 30 seconds(s) | Yes |
+| [mlsys-2026-13](https://github.com/yarongmu-google/MLSys/blob/main/benchmarks/mlsys-2026-13.json) | 63 | 126 | 30 seconds(s) | Yes |
 | mlsys-2026-14 | TBD | TBD | 30 seconds(s) |  |
 | mlsys-2026-15 | TBD | TBD | 30 seconds(s) |  |
 | mlsys-2026-16 | TBD | TBD | 30 seconds(s) |  |
-| mlsys-2026-17 | 103 | 198 | 60 seconds(s) | Yes |
+| [mlsys-2026-17](https://github.com/yarongmu-google/MLSys/blob/main/benchmarks/mlsys-2026-17.json) | 103 | 198 | 60 seconds(s) | Yes |
 | mlsys-2026-18 | TBD | TBD | 60 seconds(s) |  |
 | mlsys-2026-19 | TBD | TBD | 60 seconds(s) |  |
 | mlsys-2026-20 | TBD | TBD | 60 seconds(s) |  |
@@ -1221,7 +1221,6 @@ All benchmarks will become publicly available after the contest is complete.
     10000, 10000, 10000, 10000, 10000, 10000,
     10000, 10000, 10000, 10000, 10000, 10000,
     10000, 10000, 10000, 10000, 10000, 10000,
-    
     10000, 10000, 200, 10000, 200,
     10000, 10000, 200, 10000, 200,
     10000, 10000, 200, 10000, 200,
@@ -1230,12 +1229,10 @@ All benchmarks will become publicly available after the contest is complete.
     10000, 10000, 200, 10000, 200,
     10000, 10000, 200, 10000, 200,
     10000, 10000, 200, 10000, 200,
-    
     200, 200, 200, 200, 200, 200, 200,
     200, 200, 200, 200, 200, 200, 200, 200
   ],
   "op_types": [
-    // Attn Heads (8*6=48 ops)
     "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", 
     "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", 
     "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", 
@@ -1244,8 +1241,6 @@ All benchmarks will become publicly available after the contest is complete.
     "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", 
     "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", 
     "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", "MatMul", 
-    
-    // MoE Experts (8*5=40 ops)
     "MatMul", "MatMul", "Pointwise", "MatMul", "Pointwise", 
     "MatMul", "MatMul", "Pointwise", "MatMul", "Pointwise", 
     "MatMul", "MatMul", "Pointwise", "MatMul", "Pointwise", 
@@ -1254,8 +1249,6 @@ All benchmarks will become publicly available after the contest is complete.
     "MatMul", "MatMul", "Pointwise", "MatMul", "Pointwise", 
     "MatMul", "MatMul", "Pointwise", "MatMul", "Pointwise", 
     "MatMul", "MatMul", "Pointwise", "MatMul", "Pointwise", 
-    
-    // Aggregation (15 ops)
     "Pointwise", "Pointwise", "Pointwise", "Pointwise", "Pointwise", "Pointwise", "Pointwise", 
     "Pointwise", "Pointwise", "Pointwise", "Pointwise", "Pointwise", "Pointwise", "Pointwise", "Pointwise"
   ],
