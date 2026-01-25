@@ -6,7 +6,13 @@ Your objective is to design a scheduler that analyzes a Directed Acyclic Graph (
 
 ## The Memory Hierarchy
 
-The system is modeled with a classic two-level hierarchy consisting of some slow memory and some fast memory. The slow memory has effectively infinite capacity, but moving data to and from it is expensive and consumes limited bandwidth. In contrast, the fast memory is a high-speed scratchpad where computation actually happens, but it has a hard capacity limit. To execute any operation, the necessary input data must be moved to the fast memory, processed by the compute cores, and the results moved back. Because the fast memory is small, we may not be able to process entire tensors at once; we may need to decompose the workload.
+The system simulates a three-tier memory hierarchy common in AI accelerators.
+
+The slow Memory has effectively infinite capacity but limited bandwidth. All graph inputs start here, and all graph outputs must end here. Moving data between the slow memory and the fast memory incurs a time cost.
+
+The fast memory is a high-speed scratchpad with finite capacity (e.g., 50KB). Compute cores can only read/write data that is resident in the fast memory. Accessing this memory has infinite bandwidth (0 time cost), but data stored here consumes capacity.
+
+Ephemeral data exists when operations are grouped into a single subgraph. The intermediate data flowing between them is considered "ephemeral". It passes directly from one operation to the next without ever touching the fast memory. This data consumes zero capacity and incurs zero time cost.
 
 ## The Compute Capability
 
@@ -22,7 +28,7 @@ The third dimension, `k`, defines the reduction depth. This is primarily for Mat
 
 ## The Execution Model
 
-For every computation iteration, the system executes at your specified execution granularity. A slice of input data is loaded into the fast memory, the computation is performed, and the output slice is written back. This creates the primary physical constraint of the problem: The Working Set Limit. For any chosen execution granularity, the sum of the required input slices and the resulting output slices must fit simultaneously within the fast memory capacity. If the working set exceeds this limit, the execution will crash with an Out-Of-Memory (OOM) error.
+For every computation iteration, the system executes at your specified execution granularity. A slice of input data is loaded from the fast memory, the computation is performed, and the output slice is written back. This creates the primary physical constraint of the problem: The Working Set Limit. For any chosen execution granularity, the sum of the required input slices and the resulting output slices must fit simultaneously within the fast memory capacity. If the working set exceeds this limit, the execution will crash with an Out-Of-Memory (OOM) error.
 
 Note that the hardware has a native execution granularity (e.g., 128x128). While you may choose a finer granularity to fit data into memory, the compute cores cannot physically process chunks smaller than this native size. If you select a granularity smaller than the native size, the hardware 'pads' the execution, meaning you pay the full compute cost of the native size but produce less useful output, thereby increasing the total number of execution steps required.
 
@@ -32,7 +38,8 @@ This problem uses an abstract hardware model to focus on scheduling logic rather
 
 ## The Objective
 
-Performance is determined by a throughput-oriented roofline model. For every execution step of a subgraph, the latency is dictated by the bottleneck resource: either the time required to perform the arithmetic (compute bound) or the time required to transfer the boundary data (memory bound). However, execution between distinct subgraphs is strictly serialized; the next subgraph in the schedule begins its memory operations only after the previous subgraph has fully completed both its computation and memory transfers.  
+Performance is determined by a throughput-oriented roofline model. For every execution step of a subgraph, the latency is dictated by the bottleneck resource: either the time required to perform the arithmetic (compute bound) or the time required to transfer the boundary data (memory bound). However, execution between distinct subgraphs is strictly serialized; the next subgraph in the schedule begins its memory operations only after the previous subgraph has fully completed both its computation and memory transfers (if applicable).
+
 Your task is to produce a valid execution schedule \- a complete list of subgraphs and their respective execution granularity \- that covers every operation in the graph at least once, while minimizing the sum of these latencies.
 
 ## Input / Output Format
@@ -70,6 +77,10 @@ You must provide a JSON object containing parallel lists that define the executi
     [64, 64, 128], // Step 1: MatMul (64x64 output, 128 depth) 
     [128, 128, 1]  // Step 2: Pointwise (128x128 output, k=1)
   ],
+  "tensors_to_retain": [ // REQUIRED: Output tensors to keep in Fast Memory
+    [1],                 // Step 1: Keep Tensor 1 resident (for Step 2)
+    []                   // Step 2: Evict all outputs to Slow Memory
+  ],
   "traversal_orders": [ // OPTIONAL: Permutation of slice indices
     [0, 1, 3, 2],       // Step 1: Custom "Snake" order
     null                // Step 2: Default (Raster) [0, 1, 2, 3...] 
@@ -82,6 +93,8 @@ You must provide a JSON object containing parallel lists that define the executi
 ```
 
 Regarding the “granularities” list, the `[w, h, k]` tuple acts as a master key that deterministically sets the shape of all inputs required by the subgraph (recalling that width corresponds to columns and height corresponds to rows). The output and pointwise input will both have width `w` and height `h`. For MatMul inputs, the Left-Hand Side (LHS) input requires width `k` (reduction depth) and height `h`, while the Right-Hand Side (RHS) Input requires width `w` and height `k`.
+
+Regarding the “tensors\_to\_retain” list, a list of lists where tensors\_to\_retain\[k\] specifies which output tensors (or loaded inputs) from Subgraph k should remain resident in the fast memory after the subgraph finishes. Any tensor not in this list is automatically evicted to the slow memory (if it is an output) or discarded (if it was an input).
 
 Regarding the “traversal\_orders” list, when you choose a spatial granularity `(w, h)` smaller than the output tensor, the system implicitly creates a grid of tiles indexed in Row-Major (Raster) Order. For example, a `128x128` tensor with `64x64` granularity creates indices 0 (top-left), 1 (top-right), 2 (bottom-left), and 3 (bottom-right). The “traversal\_orders” field allows you to specify the exact sequence of execution (e.g., `[0, 1, 3, 2]`) to optimize data reuse (like a "Snake" pattern). If omitted, the system defaults to Raster order.
 
@@ -135,6 +148,7 @@ Output
 {
   "subgraphs":[[0],[1]],
   "granularities": [[128,128,1],[128,128,1]],
+  "tensors_to_retain": [[],[]],
   "traversal_orders": [null, null],
   "subgraph_latencies": [3276.8, 3276.8]
 }
@@ -164,6 +178,7 @@ Output:
 {
   "subgraphs":[[0,1]],
   "granularities": [[128,128,1]],
+  "tensors_to_retain": [[]],
   "traversal_orders": [null],
   "subgraph_latencies": [3276.8]
 }
@@ -188,6 +203,7 @@ Output:
 {
   "subgraphs":[[0,1]],
   "granularities": [[64,64,1]],
+  "tensors_to_retain": [[]],
   "traversal_orders": [null],
   "subgraph_latencies": [4400.0]
 }
@@ -199,7 +215,7 @@ Output:
     * Move `¼` `Tensor0` from the slow memory to the fast memory. `MemoryTime0_in = ¼ Tensor0/B = 64x64/10 = 409.6`  
     * Group and run `Op0` and `Op1`.  `ComputeTime0 = Op0+Op1 = 1,000+100 = 1,100`  
     * Evict `¼` `Tensor2` from the fast memory to the slow memory. `MemoryTime0_out = ¼ Tensor2/B = 64x64/10 = 409.6`  
-  * `TotalLatency0 = max(ComputeTime0, MemoryTime0_in+MemoryTime0_out) = 1,100`  
+    * `TotalLatency0 = max(ComputeTime0, MemoryTime0_in+MemoryTime0_out) = 1,100`  
 * Graph total:  
   * `TotalLatency = 4 x TotalLatency0 = 4,400`  (Compute Bound, but 1.5X faster than Strategy A).
 
@@ -232,6 +248,7 @@ Output:
 {
   "subgraphs":[[0],[1]],
   "granularities": [[128,128,1],[128,128,1]],
+  "tensors_to_retain": [[],[]],
   "traversal_orders": [null, null],
   "subgraph_latencies": [13107.2, 13107.2]
 }
@@ -263,6 +280,7 @@ Output:
 {
   "subgraphs":[[0,1]],
   "granularities": [[128,128,1]],
+  "tensors_to_retain": [[]],
   "traversal_orders": [null],
   "subgraph_latencies": [13,107.2]
 }
@@ -331,6 +349,7 @@ Output:
 {
   "subgraphs":[[0],[1],[2]],
   "granularities": [[128,128,1],[128,128,1],[128,128,1]],
+  "tensors_to_retain": [[],[],[]],
   "traversal_orders": [null,null,null],
   "subgraph_latencies": [3276.8,1638.4,3276.8]
 }
@@ -364,6 +383,7 @@ Output:
 {
   "subgraphs":[[0,1],[0,2]],
   "granularities": [[128,128,1],[128,128,1]],
+  "tensors_to_retain": [[2],[]],
   "traversal_orders": [null, null],
   "subgraph_latencies": [3000,3276.8]
 }
@@ -392,6 +412,7 @@ Output:
 {
   "subgraphs":[[0],[1,2]],
   "granularities": [[128,128,1],[128,128,1]],
+  "tensors_to_retain": [[1],[]],
   "traversal_orders": [null, null],
   "subgraph_latencies": [1638.4,3000]
 }
@@ -462,6 +483,7 @@ Output
 {
   "subgraphs": [[0]],
   "granularities": [[64,64,128]],
+  "tensors_to_retain": [[]],
   "traversal_orders": [null],
   "subgraph_latencies": [8192]
 }
@@ -509,6 +531,7 @@ Output
 {
   "subgraphs": [[0]],
   "granularities": [[64,64,128]],
+  "tensors_to_retain": [[]],
   "traversal_orders": [[0, 1, 3, 2]],
   "subgraph_latencies": [6548]
 }
@@ -615,6 +638,7 @@ Output
 {
   "subgraphs": [[0, 1]],
   "granularities": [[128, 128, 32]],
+  "tensors_to_retain": [[]],
   "traversal_orders": [null],
   "subgraph_latencies": [6915.2]
 }

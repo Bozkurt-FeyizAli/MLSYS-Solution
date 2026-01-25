@@ -12,7 +12,7 @@
 
 # Problem Description
 
-Please see PROBLEM.md.
+Please see [PROBLEM.md](https://github.com/yarongmu-google/MLSys/blob/main/PROBLEM.md).
 
 # Submission Categories & Format
 
