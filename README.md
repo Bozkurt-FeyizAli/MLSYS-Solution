@@ -4,7 +4,6 @@
 | :---- | :---- |
 | 01/22/2026 | Public launch • Call for participation • Open registration • Release starter kit |
 | 02/09/2026 | Release 5 benchmark sets |
-| 02/15/2026 | Registration deadline |
 | 04/24/2026 | Track A and Track B submission deadline (11:59 PM PT) |
 | 05/01/2026 | Writeup deadline (11:59 PM PT) |
 | 05/11/2026 | Notify winners |
