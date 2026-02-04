@@ -266,7 +266,7 @@ Output:
     * Move `¼` `Tensor1` from the slow memory to the fast memory. `MemoryTime1_in = ¼ Tensor0/B = 128x128/10 = 1,638.4`  
     * Run `Op1`.  `ComputeTime1 = Op1 = 100`  
     * Evict `¼` `Tensor2` from the fast memory to the slow memory. `MemoryTime1_out = ¼ Tensor2/B = 128x128/10 = 1,638.4`  
-  * `TotalLatency1 = 4 x max(ComputeTime1, MemoryTime0_in+MemoryTime0_out) = 13,107.2`  
+  * `TotalLatency1 = 4 x max(ComputeTime1, MemoryTime1_in+MemoryTime1_out) = 13,107.2`  
 * Graph total:  
   * `TotalLatency = TotalLatency0 + TotalLatency1 = 26,214.4` (Memory Bound).
 
@@ -351,7 +351,7 @@ Output:
   "granularities": [[128,128,1],[128,128,1],[128,128,1]],
   "tensors_to_retain": [[],[],[]],
   "traversal_orders": [null,null,null],
-  "subgraph_latencies": [3276.8,1638.4,3276.8]
+  "subgraph_latencies": [3276.8, 3276.8, 4915.2]
 }
 ```
 
@@ -363,11 +363,11 @@ Output:
 * Subgraph 1: compute `Tensor2`. Evict it to the slow memory.  
   * Move `Tensor1` from the slow memory to the fast memory. `MemoryTime1_in = Tensor1/B = 128x128/10 = 1,638.4`  
   * Run `Op1`. `ComputeTime1 = Op1 = 1,500`  
-  * Evict `Tensor2` from the fast memory to the slow memory. `MemoryTime1_out = Tensor1/B = 128x128/10 = 1,638.4`  
+  * Evict `Tensor2` from the fast memory to the slow memory. `MemoryTime1_out = Tensor2/B = 128x128/10 = 1,638.4`  
   * `TotalLatency1 = max(ComputeTime1, MemoryTime1_in+MemoryTime1_out) = 3,276.8`  
 * Subgraph 2: compute `Tensor3`. Feed `Tensor1` (evicted) and `Tensor2` (evicted) to make `Tensor3`. `Tensor3` is evicted to the slow memory as the final result of the graph.  
   * Move `Tensor1` from the slow memory to the fast memory. `MemoryTime2_in = Tensor1/B = 128x128/10 = 1,638.4`  
-  * Move `Tensor2` from the slow memory to the fast memory. `MemoryTime2_in += Tensor1/B = 128x128/10 = 1,638.4` (`MemoryTime2_in = 3276.8`)  
+  * Move `Tensor2` from the slow memory to the fast memory. `MemoryTime2_in += Tensor2/B = 128x128/10 = 1,638.4` (`MemoryTime2_in = 3276.8`)  
   * Run `Op2`. `ComputeTime2 = Op2 = 1,500`  
   * Evict `Tensor3` from the fast memory to the slow memory. `MemoryTime2_out = Tensor3/B = 128x128/10 = 1,638.4`  
   * `TotalLatency2 = max(ComputeTime2, MemoryTime2_in+MemoryTime2_out) = 4,915.2`  
