@@ -282,7 +282,7 @@ Output:
   "granularities": [[128,128,1]],
   "tensors_to_retain": [[]],
   "traversal_orders": [null],
-  "subgraph_latencies": [13,107.2]
+  "subgraph_latencies": [13107.2]
 }
 ```
 
