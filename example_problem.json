@@ -1,7 +1,7 @@
 {
   "widths": [128, 128, 128],
   "heights": [128, 128, 128],
-  "op_types": ["MatMul", "Pointwise"],
+  "op_types": ["Pointwise", "Pointwise"],
   "inputs": [[0], [1]],
   "outputs": [[1], [2]],
   "base_costs": [100, 10],
