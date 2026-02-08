@@ -56,6 +56,7 @@ $ python3 agent.py <path_to_input.json> <path_to_output.json>
 * Environment:  
   1. The organizers will inject the `GOOGLE_API_KEY` environment variable.  
   2. Network access is strictly blocked except to the Gemini API endpoint (`generativelanguage.googleapis.com`). Calls to any other LLM provider (OpenAI, Anthropic, etc.) will fail.  
+  3. **Timeout:** Your agent script is strictly limited to **10 minutes** of execution time per benchmark (including all API calls and local processing).
 * Zip Contents:  
   1. `agent.py`: The entry point script.  
   2. `requirements.txt`: A list of Python dependencies (e.g., google-generativeai, numpy).  
@@ -89,6 +90,8 @@ Please don't hesitate reaching out to the Contest Organizers if you encounter an
 # Benchmarks
 
 The contest will involve twenty-five industrial benchmarks; [five have been released](https://github.com/google/iopddl/tree/main/benchmarks) in advance to contest participants (for testing purposes), and the remaining twenty will be withheld for evaluation:
+
+**Note on Timeouts:** The timeouts listed below apply strictly to **Track A (Systems)**. For **Track B (Agents)**, a fixed timeout of **10 minutes** is applied to every benchmark to accommodate LLM inference latency.
 
 | Benchmark Name | \# Nodes | \# Edges | Timeout | Will be released to participants? |
 | :---- | :---- | :---- | :---- | :---- |
