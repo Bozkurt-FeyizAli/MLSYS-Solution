@@ -1,47 +1,106 @@
 import os
 import sys
 import json
+import re  # Regex ekledik (Temizleme için)
 import google.generativeai as genai
 from src.hardware import ProblemSpec, HardwareSimulator
 
 # API Key Kontrolü
 API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not API_KEY:
-    print("UYARI: GOOGLE_API_KEY environment variable olarak bulunamadı.")
-    API_KEY = "AIzaSyC01q02r-YmLRlnPc_pY_J_HojFO2PgDL8" 
+    # Güvenlik için buraya hardcode yapma, terminalden export et.
+    print("HATA: GOOGLE_API_KEY environment variable bulunamadı!")
+    sys.exit(1)
 
 genai.configure(api_key=API_KEY)
 
+# --- JSON TEMİZLEYİCİ ---
+def extract_json(text):
+    """LLM çıktısındaki Markdown bloklarını ve gereksiz metinleri temizler."""
+    text = text.strip()
+    # ```json ... ``` bloklarını bul
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1)
+    # Eğer blok yoksa, sadece süslü parantez arasını bulmaya çalış
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return match.group(0)
+    return text
+
 SYSTEM_PROMPT = """
-You are an expert AI accelerator scheduler.
-Your goal is to MINIMIZE LATENCY by maximizing DATA REUSE.
+You are an elite AI compiler engineer.
+Your goal is to MINIMIZE LATENCY by using DATA RESIDENCY and FUSION.
 
-CRITICAL STRATEGIES:
-1. **KERNEL FUSION (Most Important):** - Always try to group connected operations (e.g., Op0 -> Op1) into a single subgraph `[0, 1]`.
-   - This eliminates the need to write Op0's output to Slow Memory and read it back for Op1.
-   - Intermediate data between fused ops becomes "Ephemeral" (Costs 0 time, 0 memory).
+### STRATEGY (Priority Order)
 
-2. **TILING (Granularity):**
-   - Choose the LARGEST granularity [w, h, k] that fits in Fast Memory.
-   - Formula: (Input_Tile_Size + Output_Tile_Size) <= Fast_Memory_Capacity.
-   - If it fits, use [128, 128]. If not, try [128, 64], then [64, 64].
+1.  **DATA RESIDENCY (Critical):**
+    * If Op `A` runs in Step 1 and produces `Tensor X`...
+    * And Op `B` runs in Step 2 and needs `Tensor X`...
+    * **YOU MUST RETAIN `Tensor X`** in Fast Memory.
+    * *How?* Add `Tensor X`'s ID to the `tensors_to_retain` list of Step 1.
+    * *Benefit:* Eliminates Write cost in Step 1 AND Read cost in Step 2.
 
-3. **RESIDENCY:**
-   - Use 'tensors_to_retain' to keep data in Fast Memory between subgraphs if it is used immediately in the next step.
+2.  **FUSION:**
+    * Group connected operations (e.g., `[1, 2]`) to avoid intermediate IO.
 
-OUTPUT FORMAT:
-Return valid JSON only.
+3.  **TILING:**
+    * If `[128, 128]` causes OOM, try `[64, 128]` or `[64, 64]`.
+
+### REQUIRED OUTPUT FORMAT
+Return a valid JSON object with ALL keys. Do NOT omit any fields.
+
+Example:
+{
+  "subgraphs": [[0], [1, 2]],
+  "granularities": [[128, 128, 1], [128, 128, 1]],
+  "tensors_to_retain": [[1], []]
+}
 """
 
+def auto_optimize_residency(schedule, problem_spec, simulator):
+    """
+    LLM'in unuttuğu 'tensors_to_retain' listesini otomatik doldurur.
+    Eğer bir tensor, Adım N'de üretilip Adım N+1'de kullanılıyorsa ve belleğe sığıyorsa, onu SAKLAR.
+    """
+    subgraphs = schedule['subgraphs']
+    granularities = schedule['granularities']
+    
+    # Yeni retain listesi (Boş başlat)
+    new_retains = [[] for _ in range(len(subgraphs))]
+    
+    for i in range(len(subgraphs) - 1):
+        # Şu anki adımın ürettiği çıktılar
+        current_ops = subgraphs[i]
+        current_outputs = set()
+        for oid in current_ops:
+            current_outputs.update(problem_spec.ops[oid].output_ids)
+            
+        # Bir sonraki adımın ihtiyaç duyduğu girdiler
+        next_ops = subgraphs[i+1]
+        next_inputs = set()
+        for oid in next_ops:
+            next_inputs.update(problem_spec.ops[oid].input_ids)
+            
+        # Kesişim: Hem üretilen hem de sonraki adımda lazım olanlar
+        candidates = current_outputs.intersection(next_inputs)
+        
+        # Hafıza Kontrolü: Saklarsak sığar mı?
+        # Basitlik için: Eğer aday varsa direkt ekleyelim, HardwareSimulator zaten OOM kontrolü yapacak.
+        if candidates:
+            print(f"⚡ Auto-Optimization: Keeping Tensor {list(candidates)} resident between Step {i} -> {i+1}")
+            new_retains[i] = list(candidates)
+            
+    return new_retains
+
 def generate_schedule_with_retry(problem_path: str, output_path: str):
-    # 1. Problemi Yükle
+    print(f"Loading problem from: {problem_path}")
     with open(problem_path, 'r') as f:
         raw_data = json.load(f)
     
     spec = ProblemSpec.from_json(raw_data)
     sim = HardwareSimulator(spec)
 
-    # 2. LLM için Context Oluştur
     tensor_info = "\n".join([f"Tensor {k}: {v.width}x{v.height}" for k, v in spec.tensors.items()])
     op_info = "\n".join([
         f"Op {k}: {v.type}, Inputs:{v.input_ids}, Out:{v.output_ids}, Cost:{v.base_cost}" 
@@ -52,93 +111,95 @@ def generate_schedule_with_retry(problem_path: str, output_path: str):
     PROBLEM SPEC:
     Fast Memory: {spec.fast_mem_cap}
     Bandwidth: {spec.bandwidth}
-    Native Granularity: {spec.native_granularity}
-
+    
     TENSORS:
     {tensor_info}
-
     OPERATIONS:
     {op_info}
 
-    Task: Create a schedule. CAUTION: Check if tensors fit in memory. 
-    If a tensor is larger than {spec.fast_mem_cap}, use tiling (smaller granularity).
+    Task: Generate the JSON schedule.
     """
 
-    # 3. Model Başlatma
+    # Model İsmini Listene Göre Ayarladık
     model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
+        model_name="gemini-3-flash-preview", # Senin listendeki model
         system_instruction=SYSTEM_PROMPT,
-        generation_config={"response_mime_type": "application/json"}
+        generation_config={
+            "response_mime_type": "application/json", 
+            "temperature": 0.4
+        }
     )
 
-    # 4. Döngü (Retry Logic)
-    max_retries = 3
     chat = model.start_chat(history=[])
-    
     current_prompt = user_prompt
-
+    
+    max_retries = 3
     for attempt in range(max_retries):
-        print(f"--- Attempt {attempt + 1} ---")
-        response = chat.send_message(current_prompt)
-        
+        print(f"\n--- Attempt {attempt + 1}/{max_retries} ---")
         try:
-            schedule = json.loads(response.text)
+            response = chat.send_message(current_prompt)
             
-            # --- VALIDASYON VE HESAPLAMA ---
+            # --- DEBUG: Model ne cevap verdi görelim ---
+            # Eğer hata alırsan bu çıktıyı bana at
+            print(f"DEBUG (Raw Response): {response.text[:100]}...") 
+
+            # Temizleme ve Parse
+            clean_text = extract_json(response.text)
+            schedule = json.loads(clean_text)
+
+            print("🔍 Optimizing Residency...")
+            optimized_retains = auto_optimize_residency(schedule, spec, sim)
+            schedule['tensors_to_retain'] = optimized_retains
+            
+            # --- VALIDASYON ---
             is_valid = True
             error_msg = ""
             calculated_latencies = []
-            resident_tensors = set() # Başlangıçta Fast Memory boş
+            resident_tensors = set() 
 
             if "subgraphs" not in schedule or "granularities" not in schedule:
-                raise ValueError("JSON missing keys")
+                # Model bazen anahtarları yanlış isimlendiriyor, yakalayalım
+                print(f"DEBUG (Keys Found): {schedule.keys()}")
+                raise ValueError("JSON missing keys 'subgraphs' or 'granularities'")
 
-            # Adım adım simülasyon
             for i, (subgraph, gran) in enumerate(zip(schedule['subgraphs'], schedule['granularities'])):
-                # 1. Hafıza Kontrolü
                 ok, msg = sim.validate_step(subgraph, gran)
                 if not ok:
                     is_valid = False
-                    error_msg = f"Step {i} Failed: {msg}"
+                    error_msg = f"Step {i} Failed (OOM): {msg}"
                     break
                 
-                # 2. Retain (Saklanacaklar) Listesini Al
-                # Eğer LLM retain listesi vermediyse boş kabul et
                 retain_list = []
                 if "tensors_to_retain" in schedule and i < len(schedule["tensors_to_retain"]):
                     retain_list = schedule["tensors_to_retain"][i]
                 
-                # 3. Latency Hesapla (Python Yapıyor!)
                 latency = sim.calculate_latency(subgraph, gran, resident_tensors, retain_list)
                 calculated_latencies.append(latency)
-                
-                # 4. Hafıza Durumunu Güncelle (Bir sonraki adım için)
-                # Yeni resident seti = retain edilenler
                 resident_tensors = set(retain_list)
 
             if is_valid:
-                print("Valid schedule found! Overwriting latencies with calculated values.")
-                
-                # LLM'in uydurduğu sayıları sil, gerçek hesaplananları yaz
+                print("✅ Valid schedule found!")
                 schedule['subgraph_latencies'] = calculated_latencies
+                total_latency = sum(calculated_latencies)
                 
                 with open(output_path, 'w') as f:
                     json.dump(schedule, f, indent=2)
                 
-                print(f"Total Latency: {sum(calculated_latencies)}")
+                print(f"🎉 Success! Output saved to {output_path}")
+                print(f"🚀 Total Latency: {total_latency}")
                 return
             else:
-                print(f"Invalid schedule: {error_msg}")
-                current_prompt = f"Your previous solution was invalid. Error: {error_msg}. Please fix tiling."
+                print(f"❌ Invalid schedule: {error_msg}")
+                current_prompt = f"Previous solution INVALID: {error_msg}. Fix granularity/fusion and return JSON."
 
         except json.JSONDecodeError:
-            print("Invalid JSON received.")
-            current_prompt = "You returned invalid JSON. Please return ONLY valid JSON."
+            print("❌ Invalid JSON structure.")
+            current_prompt = "Return ONLY raw JSON, no markdown."
         except Exception as e:
-            print(f"Error: {e}")
-            current_prompt = f"An error occurred: {e}. Fix the format."
+            print(f"❌ Error: {e}")
+            current_prompt = f"Error: {e}. Regenerate JSON."
 
-    print("Failed to find solution after retries.")
+    print("💀 Failed after retries.")
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
