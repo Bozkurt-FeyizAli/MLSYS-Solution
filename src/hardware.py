@@ -135,6 +135,15 @@ class HardwareSimulator:
         # Çıktıları Yaz (YENİ)
         # Kural: Eğer output 'retain_next' listesindeyse (Fast Memory'de kalacaksa),
         # Ana Belleğe (Slow Memory) yazma maliyeti ÖDENMEZ.
+        # --- GÜNCELLENMİŞ ÇIKTI YAZMA MANTIĞI ---
+        
+        # 1. Bu subgraph içinde tüketilen tensörleri bul (Ephemeral Tensors)
+        # Eğer bir çıktı, aynı subgraph içindeki başka bir op tarafından girdi olarak kullanılıyorsa,
+        # o veri Fast Memory içinde akar, Ana Belleğe gitmesine gerek yoktur.
+        consumed_within_subgraph = set()
+        for oid in op_ids:
+            consumed_within_subgraph.update(self.p.ops[oid].input_ids)
+
         stored_outputs = set()
         for oid in op_ids:
             op = self.p.ops[oid]
@@ -142,11 +151,17 @@ class HardwareSimulator:
                 if out_id in stored_outputs:
                     continue
                 
-                # KRİTİK DÜZELTME: Eğer saklanacaksa (retain), yazma maliyeti 0'dır.
+                # KURAL 1: Bir sonraki adım için saklanıyorsa (Retain) -> Yazma Maliyeti 0.
                 if out_id in retain_next:
                     continue 
 
-                # Saklanmayacaksa (Evict), ana belleğe yazılır.
+                # KURAL 2 (YENİ): Subgraph içinde tüketiliyorsa (Ephemeral) -> Yazma Maliyeti 0.
+                # (Not: Eğer bu tensör aynı zamanda grafın en son çıktısıysa yazılmalı ama
+                # bu yarışma özelinde ara tensörler genelde çıktı değildir.)
+                if out_id in consumed_within_subgraph:
+                    continue
+
+                # Diğer durumlarda Ana Belleğe (Slow Memory) yazılır.
                 size = self.get_tile_dims(out_id, granularity, op.type, is_output=True)
                 memory_store_bytes += size
                 stored_outputs.add(out_id)
