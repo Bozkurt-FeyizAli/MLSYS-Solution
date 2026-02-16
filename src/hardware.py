@@ -84,23 +84,38 @@ class HardwareSimulator:
         Bir Subgraph için kesin Latency değerini hesaplar.
         Model: max(Compute, Memory_In + Memory_Out)
         """
+        
         w_tile, h_tile, k_tile = granularity
         
+        # --- calculate_latency Fonksiyonunun Başı ---
+        
         # 1. Toplam Tile Sayısını Bul (Loop Count)
-        # Referans tensör (genelde ilk output) üzerinden kaç tur döneceğimizi buluruz.
         ref_op = self.p.ops[op_ids[0]]
-        ref_tensor = self.p.tensors[ref_op.output_ids[0]]
+        
+        # Output boyutuna göre W ve H döngüleri
+        # (Çıktı tensörünün ID'si output_ids[0] kabul edilir)
+        out_tensor_id = ref_op.output_ids[0]
+        ref_tensor = self.p.tensors[out_tensor_id]
         
         num_tiles_w = math.ceil(ref_tensor.width / w_tile)
         num_tiles_h = math.ceil(ref_tensor.height / h_tile)
-        # MatMul için K boyutu da döngüye girer (Reduction)
+        
+        # --- KRİTİK GÜNCELLEME: K (Reduction) Döngüsü ---
         num_tiles_k = 1
+        
         if ref_op.type == "MatMul":
-            # MatMul'da reduction dimension genelde inputların ortak boyutudur.
-            # Basitleştirme: K boyutunun Tensor Width ile eşleştiğini varsayıyoruz (Problem tanımına göre)
-            pass 
+            # MatMul için reduction boyutu (K), Input 0'ın genişliğidir (veya Input 1'in yüksekliği).
+            # Inputs: [LHS, RHS]. LHS boyutu [Height, K].
+            lhs_id = ref_op.input_ids[0]
+            k_dim_size = self.p.tensors[lhs_id].width 
+            
+            # Eğer granülarite [w, h, k] ise, K döngüsü = Tensor_K / k_tile
+            num_tiles_k = math.ceil(k_dim_size / k_tile)
 
-        total_tiles = num_tiles_w * num_tiles_h
+        # Toplam Döngü Sayısı
+        total_tiles = num_tiles_w * num_tiles_h * num_tiles_k
+        
+        # ... kodun geri kalanı (compute ve memory hesabı) aynı ...
         
         # 2. Her bir Tile (Parça) için Maliyet Hesabı
         
