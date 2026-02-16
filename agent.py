@@ -13,23 +13,24 @@ if not API_KEY:
 genai.configure(api_key=API_KEY)
 
 SYSTEM_PROMPT = """
-You are a compiler optimization agent for a Tensor Processing Unit (TPU).
-Your goal: Generate a valid execution schedule JSON.
+You are an expert AI accelerator scheduler.
+Your goal is to MINIMIZE LATENCY by maximizing DATA REUSE.
 
-RULES:
-1. 'granularities' [w, h, k] define the tile size. Smaller tiles use less memory but increase loop overhead.
-2. Memory Constraint: (Tile Inputs + Tile Output) MUST be <= Fast Memory Capacity.
-3. If a tensor is large, you MUST decompose it using smaller granularity.
+CRITICAL STRATEGIES:
+1. **KERNEL FUSION (Most Important):** - Always try to group connected operations (e.g., Op0 -> Op1) into a single subgraph `[0, 1]`.
+   - This eliminates the need to write Op0's output to Slow Memory and read it back for Op1.
+   - Intermediate data between fused ops becomes "Ephemeral" (Costs 0 time, 0 memory).
+
+2. **TILING (Granularity):**
+   - Choose the LARGEST granularity [w, h, k] that fits in Fast Memory.
+   - Formula: (Input_Tile_Size + Output_Tile_Size) <= Fast_Memory_Capacity.
+   - If it fits, use [128, 128]. If not, try [128, 64], then [64, 64].
+
+3. **RESIDENCY:**
+   - Use 'tensors_to_retain' to keep data in Fast Memory between subgraphs if it is used immediately in the next step.
 
 OUTPUT FORMAT:
-Return ONLY raw JSON matching this structure:
-{
-  "subgraphs": [[0], [1]], 
-  "granularities": [[64, 64, 128], [128, 128, 1]],
-  "tensors_to_retain": [[], []],
-  "traversal_orders": [null, null],
-  "subgraph_latencies": [100.0, 200.0]
-}
+Return valid JSON only.
 """
 
 def generate_schedule_with_retry(problem_path: str, output_path: str):
@@ -83,31 +84,53 @@ def generate_schedule_with_retry(problem_path: str, output_path: str):
         try:
             schedule = json.loads(response.text)
             
-            # --- VALIDASYON (Python Logic) ---
+            # --- VALIDASYON VE HESAPLAMA ---
             is_valid = True
             error_msg = ""
-            
-            # Adım adım kontrol et
+            calculated_latencies = []
+            resident_tensors = set() # Başlangıçta Fast Memory boş
+
             if "subgraphs" not in schedule or "granularities" not in schedule:
                 raise ValueError("JSON missing keys")
 
+            # Adım adım simülasyon
             for i, (subgraph, gran) in enumerate(zip(schedule['subgraphs'], schedule['granularities'])):
+                # 1. Hafıza Kontrolü
                 ok, msg = sim.validate_step(subgraph, gran)
                 if not ok:
                     is_valid = False
                     error_msg = f"Step {i} Failed: {msg}"
                     break
-            
+                
+                # 2. Retain (Saklanacaklar) Listesini Al
+                # Eğer LLM retain listesi vermediyse boş kabul et
+                retain_list = []
+                if "tensors_to_retain" in schedule and i < len(schedule["tensors_to_retain"]):
+                    retain_list = schedule["tensors_to_retain"][i]
+                
+                # 3. Latency Hesapla (Python Yapıyor!)
+                latency = sim.calculate_latency(subgraph, gran, resident_tensors, retain_list)
+                calculated_latencies.append(latency)
+                
+                # 4. Hafıza Durumunu Güncelle (Bir sonraki adım için)
+                # Yeni resident seti = retain edilenler
+                resident_tensors = set(retain_list)
+
             if is_valid:
-                print("Valid schedule found!")
+                print("Valid schedule found! Overwriting latencies with calculated values.")
+                
+                # LLM'in uydurduğu sayıları sil, gerçek hesaplananları yaz
+                schedule['subgraph_latencies'] = calculated_latencies
+                
                 with open(output_path, 'w') as f:
                     json.dump(schedule, f, indent=2)
+                
+                print(f"Total Latency: {sum(calculated_latencies)}")
                 return
             else:
                 print(f"Invalid schedule: {error_msg}")
-                # Hatayı LLM'e geri besle
-                current_prompt = f"Your previous solution was invalid. Error: {error_msg}. Please fix the granularity and try again."
-                
+                current_prompt = f"Your previous solution was invalid. Error: {error_msg}. Please fix tiling."
+
         except json.JSONDecodeError:
             print("Invalid JSON received.")
             current_prompt = "You returned invalid JSON. Please return ONLY valid JSON."

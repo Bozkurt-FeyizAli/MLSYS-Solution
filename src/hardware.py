@@ -1,6 +1,6 @@
 import math
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Set
 
 @dataclass
 class Tensor:
@@ -11,7 +11,7 @@ class Tensor:
 @dataclass
 class Operation:
     id: int
-    type: str  # "MatMul" or "Pointwise"
+    type: str
     input_ids: List[int]
     output_ids: List[int]
     base_cost: float
@@ -22,7 +22,7 @@ class ProblemSpec:
     ops: Dict[int, Operation]
     fast_mem_cap: int
     bandwidth: int
-    native_granularity: Tuple[int, int]  # (w, h)
+    native_granularity: Tuple[int, int]
 
     @staticmethod
     def from_json(data: Dict) -> 'ProblemSpec':
@@ -52,69 +52,129 @@ class HardwareSimulator:
     def __init__(self, problem: ProblemSpec):
         self.p = problem
 
-    def calculate_tile_memory(self, op_id: int, gran: List[int]) -> int:
+    def get_tile_dims(self, tensor_id: int, granularity: List[int], op_type: str, is_output: bool = False, input_idx: int = 0) -> int:
+        """Bir tile (parça) için gerekli veri boyutunu hesaplar."""
+        w_tile, h_tile, k_tile = granularity
+        
+        # Eğer bu bir output ise boyut her zaman w * h
+        if is_output:
+            return w_tile * h_tile
+
+        # Input ise Op tipine göre değişir
+        if op_type == "Pointwise":
+            return w_tile * h_tile
+        
+        elif op_type == "MatMul":
+            # MatMul Inputs: [LHS (Sol), RHS (Sağ)]
+            # LHS: [h, k] -> h_tile * k_tile
+            # RHS: [k, w] -> k_tile * w_tile
+            if input_idx == 0: # LHS
+                return h_tile * k_tile
+            else: # RHS
+                return k_tile * w_tile
+        
+        return 0
+
+    def calculate_latency(self, 
+                          op_ids: List[int], 
+                          granularity: List[int], 
+                          resident_tensors: Set[int], 
+                          retain_next: List[int]) -> float:
         """
-        Verilen bir Granularity [w, h, k] için o operasyonun
-        Fast Memory'de kaplayacağı anlık alanı (Working Set) hesaplar.
+        Bir Subgraph için kesin Latency değerini hesaplar.
+        Model: max(Compute, Memory_In + Memory_Out)
         """
-        w, h, k = gran
-        op = self.p.ops[op_id]
+        w_tile, h_tile, k_tile = granularity
         
-        mem_usage = 0
+        # 1. Toplam Tile Sayısını Bul (Loop Count)
+        # Referans tensör (genelde ilk output) üzerinden kaç tur döneceğimizi buluruz.
+        ref_op = self.p.ops[op_ids[0]]
+        ref_tensor = self.p.tensors[ref_op.output_ids[0]]
         
-        # 1. Output Tensor Boyutu (Her zaman w * h)
-        # Not: Yarışma kurallarına göre çıktı tile'ı hafızada yer tutmalı.
-        mem_usage += w * h
+        num_tiles_w = math.ceil(ref_tensor.width / w_tile)
+        num_tiles_h = math.ceil(ref_tensor.height / h_tile)
+        # MatMul için K boyutu da döngüye girer (Reduction)
+        num_tiles_k = 1
+        if ref_op.type == "MatMul":
+            # MatMul'da reduction dimension genelde inputların ortak boyutudur.
+            # Basitleştirme: K boyutunun Tensor Width ile eşleştiğini varsayıyoruz (Problem tanımına göre)
+            pass 
+
+        total_tiles = num_tiles_w * num_tiles_h
         
-        # 2. Input Tensor Boyutları
-        if op.type == "Pointwise":
-            # Pointwise işlemde input tile boyutu output ile aynıdır
-            # k boyutu yoksayılır (1 kabul edilir)
-            for _ in op.input_ids:
-                mem_usage += w * h
+        # 2. Her bir Tile (Parça) için Maliyet Hesabı
+        
+        # A) Compute Time (İşlem Gücü)
+        # Basit Model: Base Cost / Toplam Parça Sayısı
+        total_base_cost = sum(self.p.ops[oid].base_cost for oid in op_ids)
+        compute_time_per_tile = total_base_cost / total_tiles
+
+        # B) Memory Time (Veri Taşıma)
+        memory_load_bytes = 0
+        memory_store_bytes = 0
+        
+        # Girdileri Yükle
+        loaded_inputs = set()
+        for oid in op_ids:
+            op = self.p.ops[oid]
+            for idx, inp_id in enumerate(op.input_ids):
+                # Eğer input zaten hafızadaysa (resident) yükleme maliyeti 0
+                if inp_id in resident_tensors:
+                    continue
+                # Aynı subgraph içinde bir önceki op'un çıktısıysa (Fusion) maliyet 0
+                if inp_id in [out for prev_op in op_ids for out in self.p.ops[prev_op].output_ids]:
+                    continue
                 
-        elif op.type == "MatMul":
-            # MatMul Inputs: [LHS, RHS]
-            # LHS (Sol Matris): row=h, col=k -> h * k
-            # RHS (Sağ Matris): row=k, col=w -> k * w
-            if len(op.input_ids) >= 1: # LHS
-                mem_usage += h * k
-            if len(op.input_ids) >= 2: # RHS
-                mem_usage += k * w
-                
-        return mem_usage
+                # Inputu yükle
+                if inp_id not in loaded_inputs:
+                    size = self.get_tile_dims(inp_id, granularity, op.type, is_output=False, input_idx=idx)
+                    memory_load_bytes += size
+                    loaded_inputs.add(inp_id)
+
+        # Çıktıları Yaz
+        # Sadece "retain" edilmeyen (saklanmayacak) çıktılar ana belleğe (Slow Memory) yazılır.
+        # Veya yarışma kuralı: "All graph outputs need to reside in slow memory at the end".
+        # Basitleştirme: Her output yazılır, retain edilenler Fast Memory'de kalır (write-back policy).
+        stored_outputs = set()
+        for oid in op_ids:
+            op = self.p.ops[oid]
+            for out_id in op.output_ids:
+                if out_id not in stored_outputs:
+                    size = self.get_tile_dims(out_id, granularity, op.type, is_output=True)
+                    memory_store_bytes += size
+                    stored_outputs.add(out_id)
+
+        # Bandwidth'e böl
+        memory_time_per_tile = (memory_load_bytes + memory_store_bytes) / self.p.bandwidth
+
+        # 3. Roofline Modeli: Hangisi yavaşsa onu al
+        step_latency = max(compute_time_per_tile, memory_time_per_tile)
+        
+        # 4. Toplam Süre = Tek Adım * Adım Sayısı
+        return step_latency * total_tiles
 
     def validate_step(self, op_ids: List[int], granularity: List[int]) -> Tuple[bool, str]:
-        """
-        Gemini'nin önerdiği bir adımın (Subgraph) geçerli olup olmadığını kontrol eder.
-        """
-        # 1. Native Granularity Kontrolü (İsteğe bağlı, padding uyarısı yapılabilir)
-        # Şimdilik sadece hard memory limitine bakıyoruz.
+        """Working Set (Anlık Hafıza) Kontrolü"""
+        total_mem = 0
         
-        total_working_set = 0
+        # Çok basit worst-case hesabı
+        # Subgraph içindeki tüm unique input ve output tile'larını topla
+        seen_tensors = set()
         
-        # Subgraph içindeki her operasyon için en kötü durum (peak memory) senaryosuna bakmalıyız.
-        # Basitleştirme: Subgraph içindeki max tile gereksinimini alıyoruz.
-        # (Gerçekte fused op'larda intermediate buffer yoktur, sadece input+output vardır)
-        
-        # Eğer tek operasyon varsa direkt hesapla
-        if len(op_ids) == 1:
-            usage = self.calculate_tile_memory(op_ids[0], granularity)
-            if usage > self.p.fast_mem_cap:
-                return False, f"OOM: Op {op_ids[0]} needs {usage} bytes, cap is {self.p.fast_mem_cap}"
-        else:
-            # Fused operasyonlar için basitleştirilmiş mantık:
-            # İlk Op'un inputları + Son Op'un outputları bellekte olmalı.
-            # Ara tensörler (ephemeral) bellekte yer kaplamaz (0 size).
-            pass # TODO: Burası gelişmiş fusion mantığı için güncellenecek.
-            # Şimdilik "Worst Case" olarak her operasyonu ayrı ayrı sığıyor mu diye kontrol edelim.
-            for oid in op_ids:
-                usage = self.calculate_tile_memory(oid, granularity)
-                if usage > self.p.fast_mem_cap:
-                    return False, f"OOM inside fusion: Op {oid} needs {usage} bytes"
-
+        for oid in op_ids:
+            op = self.p.ops[oid]
+            # Inputs
+            for idx, inp in enumerate(op.input_ids):
+                if inp not in seen_tensors:
+                    total_mem += self.get_tile_dims(inp, granularity, op.type, is_output=False, input_idx=idx)
+                    seen_tensors.add(inp)
+            # Outputs
+            for out in op.output_ids:
+                if out not in seen_tensors:
+                    total_mem += self.get_tile_dims(out, granularity, op.type, is_output=True)
+                    seen_tensors.add(out)
+                    
+        if total_mem > self.p.fast_mem_cap:
+            return False, f"OOM: Requires {total_mem}, Cap {self.p.fast_mem_cap}"
+            
         return True, "OK"
-
-    def get_tensor_dims(self, tid: int) -> str:
-        t = self.p.tensors[tid]
-        return f"{t.width}x{t.height}"
