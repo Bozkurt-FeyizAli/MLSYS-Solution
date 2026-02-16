@@ -131,18 +131,25 @@ class HardwareSimulator:
                     memory_load_bytes += size
                     loaded_inputs.add(inp_id)
 
-        # Çıktıları Yaz
-        # Sadece "retain" edilmeyen (saklanmayacak) çıktılar ana belleğe (Slow Memory) yazılır.
-        # Veya yarışma kuralı: "All graph outputs need to reside in slow memory at the end".
-        # Basitleştirme: Her output yazılır, retain edilenler Fast Memory'de kalır (write-back policy).
+
+        # Çıktıları Yaz (YENİ)
+        # Kural: Eğer output 'retain_next' listesindeyse (Fast Memory'de kalacaksa),
+        # Ana Belleğe (Slow Memory) yazma maliyeti ÖDENMEZ.
         stored_outputs = set()
         for oid in op_ids:
             op = self.p.ops[oid]
             for out_id in op.output_ids:
-                if out_id not in stored_outputs:
-                    size = self.get_tile_dims(out_id, granularity, op.type, is_output=True)
-                    memory_store_bytes += size
-                    stored_outputs.add(out_id)
+                if out_id in stored_outputs:
+                    continue
+                
+                # KRİTİK DÜZELTME: Eğer saklanacaksa (retain), yazma maliyeti 0'dır.
+                if out_id in retain_next:
+                    continue 
+
+                # Saklanmayacaksa (Evict), ana belleğe yazılır.
+                size = self.get_tile_dims(out_id, granularity, op.type, is_output=True)
+                memory_store_bytes += size
+                stored_outputs.add(out_id)
 
         # Bandwidth'e böl
         memory_time_per_tile = (memory_load_bytes + memory_store_bytes) / self.p.bandwidth
