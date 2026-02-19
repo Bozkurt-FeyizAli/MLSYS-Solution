@@ -108,7 +108,7 @@ class HardwareSimulator:
         # A1. Compute Time (Her adımda)
         total_base_cost = sum(self.p.ops[oid].base_cost for oid in op_ids)
         # Base cost tüm işlemi kapsar, bunu toplam tile sayısına böleriz
-        compute_time_per_tile = total_base_cost / total_loop_tiles
+        compute_time_per_tile = total_base_cost
 
         # A2. Input Load Time (Her adımda tekrarlanır)
         memory_load_bytes = 0

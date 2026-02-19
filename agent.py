@@ -30,36 +30,31 @@ def extract_json(text):
 
 SYSTEM_PROMPT = """
 You are an elite AI compiler engineer.
-Your goal is to MINIMIZE LATENCY by using DATA RESIDENCY, FUSION, and SPLIT-K TILING.
+Your ABSOLUTE GOAL is to MINIMIZE LATENCY. You will fail if you do not use FUSION.
 
-### STRATEGY (Priority Order)
+### STRICT RULES (Follow in Order)
 
-1.  **FUSION IS MANDATORY:**
-    * Always aim to group Producer->Consumer ops (e.g., `[0, 1]`).
-    * Fusion saves massive bandwidth. Separation is the last resort.
+1.  **AGGRESSIVE FUSION (NO SINGLE OPS):**
+    * NEVER output single-operation subgraphs like `[[0], [1], [2]]`. This is a failure.
+    * You MUST group operations into large chunks (e.g., `[[0, 1, 2, 3], [4, 5, 6]]`).
+    * Follow the topology: Group producers and consumers together.
 
-2.  **SPLIT-K TILING (The Secret Weapon):**
-    * If a fused subgraph `[0, 1]` with `[128, 128, 128]` does NOT fit in memory...
-    * **DO NOT** separate the ops.
-    * **INSTEAD**, reduce the `k` dimension (3rd number).
-    * *Try:* `[128, 128, 32]` or `[128, 128, 64]`.
-    * *Why?* This reduces the input buffer size while keeping the output accumulator resident, allowing Fusion to succeed in tight memory.
+2.  **TILING OVER SEPARATION (OOM Handling):**
+    * If a large fused chunk causes Out of Memory (OOM), DO NOT break the chunk apart.
+    * INSTEAD, aggressively reduce the granularity (Tiling).
+    * Try `[64, 64, 64]`, `[32, 32, 32]`, or `[16, 16, 16]`.
 
 3.  **DATA RESIDENCY:**
-    * If Op A produces Tensor X, and Op B needs it, put Tensor X in `tensors_to_retain`.
+    * Use `tensors_to_retain` to keep intermediate tensors in Fast Memory between steps.
 
-### MEMORY CALCULATION RULE OF THUMB
-* **Standard:** Memory = Input + Output
-* **Split-K:** Memory = (Full Output Accumulator) + (Small Input Slice)
+### REQUIRED EXACT OUTPUT FORMAT
+You MUST return a single JSON object with EXACTLY these three keys at the root level. Do NOT wrap them in a "schedule" object. Do NOT use custom keys like "fused_ops".
 
-### REQUIRED OUTPUT FORMAT
-Return a valid JSON object with ALL keys.
-
-Example (Split-K Strategy):
+Example:
 {
-  "subgraphs": [[0, 1]], 
-  "granularities": [[128, 128, 32]], 
-  "tensors_to_retain": [[3]] 
+  "subgraphs": [[0, 1, 2, 3], [4, 5]], 
+  "granularities": [[64, 64, 64], [128, 128, 32]], 
+  "tensors_to_retain": [[3], []] 
 }
 """
 
@@ -127,7 +122,7 @@ def generate_schedule_with_retry(problem_path: str, output_path: str):
 
     # Model İsmini Listene Göre Ayarladık
     model = genai.GenerativeModel(
-        model_name="gemini-3-flash-preview", # Senin listendeki model
+        model_name="gemini-2.5-flash", # Senin listendeki model
         system_instruction=SYSTEM_PROMPT,
         generation_config={
             "response_mime_type": "application/json", 
